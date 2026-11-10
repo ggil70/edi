@@ -1,0 +1,567 @@
+<?php
+
+namespace App\Traits;
+
+
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\File; // Importante importar esto para trabajar con archivo fisico
+
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+
+use App\Models\Archivo_Recibido;
+use App\Models\Archivo_Encabezado;
+use App\Models\Archivo_Detalle;
+use App\Models\Cliente;
+use App\Models\Log_Error_Archivo;
+use App\Models\Archivo_Descarga;
+use App\Models\Proveedor_Limite;
+use App\Models\Parametro;
+use App\Models\Simf_Error;
+
+
+use Illuminate\Support\Facades\Session;
+
+//use Illuminate\Support\Facades\Log;
+
+use Exception;
+
+trait funcValidarDetalles
+{
+    /**
+     * Realiza operaciones con archivos físicos
+     *
+     * @param array $data Los datos del pago a validar.
+     * @return \Illuminate\Http\JsonResponse
+     */
+    use AS400Banco;
+    use AS400Cuentas;
+
+
+
+    public function validarDetalleArchivos($idDescarga, $idArchivo, $reproceso){
+        //Validar funcionamiento del AS400 antes de procesar la validacion del archivo
+        //de no haber conexion se detiene el proceso.
+        $this->validarAS400(); 
+
+        $detalle = 1;
+
+        if( $reproceso == 0){
+            $nivelProceso = 2;
+            $errorArchivo = 0;
+            
+            $resArchivos = Archivo_Recibido::obtenerArchivoRecibido($idDescarga, $nivelProceso, $errorArchivo,$detalle);
+        }else{
+            $resArchivos = Archivo_Recibido::obtenerArchivorReproceso($idArchivo, $detalle);
+        }
+
+        if($resArchivos['respuesta']=='0'){
+            $arrgArchivos = $resArchivos['arrgData'];
+            //Obtener arreglo de bancos
+            $arrgBanco = $this->consultaBanco();
+
+            
+            foreach ($arrgArchivos as $archivo){
+                $idArchivo =  $archivo->id;
+                $nobArchivo = $archivo->nob_archivo;
+                $rifPagador = $archivo->rif_pagador;
+                $docPagador = $archivo->nro_documento;
+                //Obtener datos del encabezado
+
+                $respEncabezado = Archivo_Encabezado::where('id_archivo', $archivo->id)
+                                     ->first(); 
+                if($respEncabezado){    
+            
+                    $fecPago = $respEncabezado->fecha_pago;
+                    $fecValor = substr($fecPago,4,4) . '-' . substr($fecPago,2,2) . '-' . substr($fecPago,0,2);
+
+                    
+/*eliminar alto valor
+                    $resParametro = Parametro::where('cod_parametro','alto.valor')
+                                        ->first();
+                    $mtoAltoValor = $resParametro->valor;
+  Fin eliminar alto valor
+*/ 
+
+
+
+
+                    if($archivo->status_proceso == 0){
+                        /* eliminar alto valor                        
+                        $respDetalle = $this->procesarDetalle($idArchivo, $nobArchivo, $rifPagador, $docPagador, $arrgBanco, $mtoAltoValor, $fecValor); 
+                        fin eliminar alto valor*/
+
+                        $respDetalle = $this->procesarDetalle($idArchivo, $nobArchivo, $rifPagador, $docPagador, $arrgBanco, $fecValor); 
+
+
+                    }else{
+                        $codErrorEncabezado = $respEncabezado->cod_error_encabezado;
+                        $descErrorEncabezado = $respEncabezado->desc_error_encabezado;                   
+                        $respDetalle = $this->detalleEncabezadoError($idArchivo, $nobArchivo, $rifPagador, $docPagador, $archivo->error_encabezado, $descErrorEncabezado, $codErrorEncabezado, $fecValor);
+                        $respDetalle = 2;
+                    }
+
+                    if($respDetalle == 0){
+                        //actualizar archivo_recibidos con el nivel de detalle
+                        $archivoRecibido = Archivo_Recibido::find($idArchivo);
+                        $archivoRecibido->nivel_proceso = 3;
+                        $archivoRecibido->ruta_archivo = 'procesados';
+                        $archivoRecibido->mto_detalle_ok = $archivoRecibido->tot_monto_pago;
+                        $archivoRecibido->nro_detalle_ok = $archivoRecibido->nro_registro;
+                        $archivoRecibido->save();   
+                        //mover archivo a la carpeta procesado
+                        $this->copiarArchivoProcesados($nobArchivo);
+                    }else if($respDetalle == 2){
+                          //0 = Nro registro  //0.00 monto cero, //3 =archivo sin detalle 
+                          $this->rechazarArchivo($idDescarga, $idArchivo, $nobArchivo, 0, 0.00, 4);
+
+                    }else if($respDetalle == 3){
+                          //0 = Nro registro  //0.00 monto cero, //3 =archivo sin detalle 
+                          $this->rechazarArchivo($idDescarga, $idArchivo, $nobArchivo, 0, 0.00, 3);
+                    }else if($respDetalle == 1){
+                        $arregloDetalle = Archivo_Detalle::where('id_archivo', $idArchivo)->get();
+                        $mtoDetalle = 0.00;
+                        $nroDetalle = 0;
+                        $mtoDetalleRec = 0.00;
+                        $nroDetalleRec = 0;
+                        if(count($arregloDetalle)>0){
+                            foreach ($arregloDetalle as $arrgDetalle){
+                                if($arrgDetalle->error_detalle == 0){
+                                    $mtoDetalle = $mtoDetalle + $arrgDetalle->monto_pagar;
+                                    $nroDetalle = $nroDetalle + 1;
+                                }else{
+                                    $mtoDetalleRec = $mtoDetalleRec + $arrgDetalle->monto_pagar;
+                                    $nroDetalleRec = $nroDetalleRec + 1;
+                                }    
+                            }
+
+                            
+                               
+                            if($nroDetalle == 0){
+                                //archivo con detalle pero todos erroneos
+                                $this->rechazarArchivo($idDescarga, $idArchivo, $nobArchivo, $nroDetalleRec, $mtoDetalleRec, 1);
+                            }else{
+                                //actualizar archivo_recibidos con el nivel de detalle
+                                $archivoRecibido = Archivo_Recibido::find($idArchivo);
+                                $archivoRecibido->nivel_proceso = 3;
+                                $archivoRecibido->ruta_archivo = 'procesados';
+                                $archivoRecibido->mto_detalle_ok = $mtoDetalle;
+                                $archivoRecibido->nro_detalle_ok = $nroDetalle;
+                                $archivoRecibido->mto_detalle_rec = $mtoDetalleRec;
+                                $archivoRecibido->nro_detalle_rec = $nroDetalleRec;
+                                $archivoRecibido->save();   
+                                //mover archivo a la carpeta procesado
+                                $this->copiarArchivoProcesados($nobArchivo);
+                            }    
+                        }
+                    }    
+                }  //fin sin encabezado  
+            }  //Fin foreach archivo  
+        } //Fin de  if($resArchivos['respuesta']=='0')   
+        return 0;
+    }
+
+
+    public function rechazarArchivo($idDescarga, $idArchivo, $nobArchivo, $nroRechazo, $mtoRechazo, $opcion){
+        //actualizar archivo_recibidos con el error del detalle
+
+
+        $archivoRecibido = Archivo_Recibido::find($idArchivo);
+        $archivoRecibido->mto_detalle_rec = $mtoRechazo;
+        $archivoRecibido->nro_detalle_rec = $nroRechazo;
+        $archivoRecibido->status_proceso = 2;            
+        $archivoRecibido->nivel_proceso = 3;            
+
+
+        if($opcion == 3){
+            $archivoRecibido->error_archivo = 10;  //sin detalle 
+            $archivoRecibido->desc_error = '293 - ERROR ARCHIVO SIN DETALLE'; 
+        }else{
+            $archivoRecibido->error_archivo = 6; 
+            $archivoRecibido->desc_error = '290 - ERROR DETALLE ARCHIVO'; 
+        }
+
+        $archivoRecibido->save();
+        if($opcion != 4){
+	        //actualizar archivo_descarga con el error del detalle
+        	$archivoDescarga = Archivo_Descarga::find($idDescarga);
+	        $nroArchivoOK = $archivoDescarga->nro_archivo_ok - 1;
+	        $nroArchivoError = $archivoDescarga->nro_archivo_error + 1;
+	        if($nroArchivoError == $archivoDescarga->nro_archivo){  
+	            $archivoDescarga->status_descarga = 'X';
+        	    $archivoDescarga->mot_status = "LOS ARCHIVOS DESCARGADO PRESENTAN FALLAS";
+	        }    
+        	$archivoDescarga->nro_archivo_ok = $nroArchivoOK;
+	        $archivoDescarga->nro_archivo_error = $nroArchivoError;
+	        $archivoDescarga->save();
+        }  
+
+        //rechazar todos los pagos
+/*        Archivo_Detalle::where('error_pago',0)
+                        ->where('id_archivo', $idArchivo)
+                        ->update(['error_pago'=>1,
+                                  'cod_error_pago'=>'390',
+                                  'desc_error_pago'=>'390- ERROR DETALLE ARCHIVO']);     
+*/
+        //Mover archivo a carpeta de error
+        $this->copiarArchivoError($nobArchivo);
+    }
+
+    /* Elimnar alto valor
+    public function procesarDetalle($idArchivo, $nobArchivo, $rifPagador, $docPagador, $arrgBanco, $mtoAltoValor, $fecValor)
+    Fin Elimnar alto valor*/
+
+    public function procesarDetalle($idArchivo, $nobArchivo, $rifPagador, $docPagador, $arrgBanco, $fecValor){
+        $error = '';   
+        $descripcion = '';
+        $nroLineas = 0;
+        $cadenaError = "";
+        $cadenaValido = "";
+        $arregloError= array();
+        $arregloValidado=array();
+        $swError = 0;  //Si existe un detalle con error todo el archivo se rechaza
+
+        //$rutaArchivo  = storage_path('app\archivos\temporales\\' . $nobArchivo);
+        $rutaArchivo = storage_path('app/archivos/temporales/' . $nobArchivo);
+         
+        if (File::exists($rutaArchivo)) {
+            $archivo = File::lines($rutaArchivo); 
+            $numeroLinea = 0;
+            $leidoHeader = false;
+            $totalRegistroOK = 0;
+            $totalMontoDetalle = 0;
+            $nroDetalle = 0;
+
+            foreach ($archivo as $linea) {
+                $error = '';   
+                $errorPago = 0;
+                $descripcion = '';  
+                $descripcionPago = '';          
+                $swLinea = 0;
+                $nroLineas+=1;
+                if(!empty($linea)){
+                    $arrayLinea = explode(';', $linea);
+                    if(!$leidoHeader){
+                        $arregloValidado[] = array(
+                            'cliente'=>$rifPagador,
+                            'registro'=>$linea
+                        );                          
+                        $leidoHeader = true;
+                    }else{
+
+                        if(count($arrayLinea)!=8){
+                            //Validación de la estructura del encabezado, debe tener 10 elementos
+                            $error = '391';
+                            $descripcion = '391;' . Simf_Error::mensajeError('391', count($arrayLinea));
+                            $swPago = 1;
+                            $swError=1;
+                        }
+
+                        if(empty($error)){
+                            $nroDetalle = $nroDetalle + 1;
+
+                            /*Eliminar alto valor
+                            $descripcion = $this->validarCamposDetalle($arrayLinea, $arrgBanco, $mtoAltoValor);
+                            Fin eliminar alto valor*/
+
+                            $descripcion = $this->validarCamposDetalle($arrayLinea, $arrgBanco);
+
+
+                            if(!empty($descripcion)){
+                                $arrgError = explode(";", $descripcion);
+                                $error=$arrgError[0];
+                                $errorPago = $error;
+                                $mensajeError = $arrgError[1];
+                                $descripcionError = 'LINEA: ' . $nroLineas . ' [ ' . $mensajeError . ' ]';
+                                $descripcionPago = trim($mensajeError);
+                                $swError=1;
+                                $error = 1;
+                            }else{
+                                $error=0;
+                                $descripcionError = 'LINEA: ' . $nroLineas . ' [ 300 - REGISTRO DETALLE EXITOSO ]';
+                                $errorPago = '300';
+                                $totalRegistroOK+=1;
+                                $totalMontoDetalle+=$arrayLinea['4'];
+
+                            }  
+                        }
+
+                        if($nroDetalle > 0){
+                            //Gr¿uaradr detalle en tabla detalle 
+                            $tDocumento = '';
+                            if(isset($arrayLinea[1])){
+                                $tDocumento = substr($arrayLinea[1],0,1); 
+                            } 
+                                               
+                            $nDocumento = '';
+                            if(isset($arrayLinea[2])){
+                                $nDocumento = $arrayLinea[2]; 
+                            } 
+
+                            $nProveedor = '';
+                            if(isset($arrayLinea[3])){
+                                $nProveedor = $arrayLinea[3];
+                            } 
+
+                            $nMonto = '';
+                            $nMontoOk = 0.00;
+                            if(isset($arrayLinea[4])){
+                                $nMonto = $arrayLinea[4];
+                                if($error!="308"){
+                                    $nMontoOk = $arrayLinea[4];
+                                }
+                            } 
+
+                            $cReceptora = '';
+                            if(isset($arrayLinea[5])){
+                                $cReceptora = $arrayLinea[5];
+                            } 
+
+                            $email = '';
+                            if(isset($arrayLinea[6])){
+                                $email = $arrayLinea[6];
+                            } 
+
+                            $eReferencia = '';
+                            if(isset($arrayLinea[7])){
+                                $eReferencia = $arrayLinea[7];
+                            } 
+
+                            //Gr¿uaradr detalle en tabla detalle
+                            $archivoDetalle = new Archivo_Detalle();
+                            $archivoDetalle->id_archivo = $idArchivo;
+                            $archivoDetalle->tipo_documento = $tDocumento;
+                            $archivoDetalle->nro_documento = $nDocumento;
+                            $archivoDetalle->nob_proveedor = $nProveedor;
+                            $archivoDetalle->monto_pagar = $nMonto;
+                            $archivoDetalle->monto_pagar_ok = $nMontoOk;
+                            $archivoDetalle->cta_receptora = $cReceptora;
+                            $archivoDetalle->email_receptor = $email;
+                            $archivoDetalle->nro_referencia = $eReferencia;
+                            $archivoDetalle->linea = $linea;
+                            $archivoDetalle->nro_linea = $nroLineas;
+                            $archivoDetalle->fecha_pago = $fecValor;
+
+                            if($error == 1){
+                                $archivoDetalle->error_detalle = 1;
+                                $archivoDetalle->error_pago = 1;
+                                $archivoDetalle->cod_error_pago = $errorPago;
+                                $archivoDetalle->desc_error_pago =  $descripcionPago;
+                            }    
+                            $archivoDetalle->cod_error_detalle = $errorPago;
+                            $archivoDetalle->desc_error_detalle = $descripcionError;
+                            $archivoDetalle->save();
+                        }else{
+
+                        }    
+                    }//if header    
+                } //empty(linea)     
+            }  //Fin 
+ 
+        }//fin if lectura de archivolectura    
+
+        if($nroDetalle == 0){
+            return 3;   //Sin detelle
+        }else{
+            return 1;            
+        }
+
+    }    
+
+    /* eliminar alto valor
+    public function validarCamposDetalle($arrayLinea, $arrgBanco, $mtoAltoValor){
+    Fin eliminar alto valor */
+
+    public function validarCamposDetalle($arrayLinea, $arrgBanco){
+        $descripcion = "";
+        if(strtoupper($arrayLinea[0]) != 'P'){
+             //Validación de la identificación del Pago
+             $descripcion = '390;' . Simf_Error::mensajeError('390', $arrayLinea[0]);
+             return $descripcion;
+        }
+
+        $swError = $this->valTipoDocumento($arrayLinea[1]); 
+        if($swError == 1){
+            $descripcion= '303;' . Simf_Error::mensajeError('303', $arrayLinea[1]);
+            return $descripcion;
+
+        }
+
+        //validar nro documento
+        $swError = $this->valDigitos($arrayLinea[2]); 
+        if($swError == 1){
+            $descripcion= '304;' . Simf_Error::mensajeError('304', $arrayLinea[2]);
+            return $descripcion;
+
+        }           
+
+        //validar Nombre proveedor
+        if(empty($arrayLinea[3])){ 
+
+            $descripcion= '305;' . Simf_Error::mensajeError('305', $arrayLinea[3]);
+            return $descripcion;
+        }
+
+        //validar nro cuenta banco
+        $swError = $this->valCuentaBanco($arrayLinea[5]); 
+        if($swError == 1){
+            $descripcion = '306;' . Simf_Error::mensajeError('306', $arrayLinea[5]);
+            return $descripcion;
+
+        }else{
+            $codBanco = trim(substr($arrayLinea[5],0,4));
+            $swError = $this->obtenerDatosBanco($arrgBanco, $codBanco);  //Validar metod 11 4 primeros digitos
+            if($swError['resp'] == 1){
+                $descripcion = '306;' . Simf_Error::mensajeError('306', $arrayLinea[5]);
+                return $descripcion;
+            }else{
+                if($codBanco == '0171'){
+                    $identificacion = $arrayLinea[1] . str_pad($arrayLinea[2], 9, "0", STR_PAD_LEFT);
+                    $arrgCuentas = $this->obtenerCtasCliente($identificacion);
+
+                    if($arrgCuentas['error'] == 0){
+                        $descripcion = '307;' . Simf_Error::mensajeError('307', $arrayLinea[5]);
+                        return $descripcion;
+                    }else{
+                        $ctaActiva = 0;
+                        foreach($arrgCuentas['respuesta'] as $cuentas){
+                            if($cuentas['SUMACN'] == $arrayLinea[5] && $cuentas['SUMAST'] == 'A' && $cuentas['SUMCCY'] == 'VEB'){
+                                $ctaActiva = 1;
+                            }
+                        }
+                        if($ctaActiva == 0){
+                            $descripcion = '307;' . Simf_Error::mensajeError('307', $arrayLinea[5]);
+                            return $descripcion;
+                        }else{
+                            $descripcion = '';
+                        } 
+                    }
+                }    
+            }
+        } 
+
+        //Validar monto pago
+        $swError = $this->valDecimales($arrayLinea[4]);
+        if($swError == 1){
+            $descripcion = '308;' . Simf_Error::mensajeError('308', $arrayLinea[4]);
+            return $descripcion;
+        }else{
+            if($arrayLinea[4] == '0.00'){
+                $descripcion = '309;' . Simf_Error::mensajeError('309', $arrayLinea[4]);
+                return $descripcion; 
+            }
+        }                        
+
+
+        //Validar limite del monto
+        $monto = $arrayLinea[4];
+
+/*        if($monto > $mtoAltoValor){
+            $descripcion = '310;' . Simf_Error::mensajeError('310', $arrayLinea[4]);
+            return $descripcion;
+        }     
+*/        
+
+        //validar Correo del cliente
+        /*$swError = $this->valCorreo($arrayLinea[6]); 
+        if($swError == 1){
+            if(!empty($descripcion)){
+                $descripcion.= ' - ';
+            }
+            $descripcion = '311;' . Simf_Error::mensajeError('311', $arrayLinea[6]);
+        }*/
+
+        //validar referencia
+        $swError = $this->valDigitos($arrayLinea[7]); 
+        if($swError == 1){
+            $descripcion = '312;' . Simf_Error::mensajeError('312', $arrayLinea[7]);
+            return $descripcion;
+        } 
+        return $descripcion;
+    }
+
+
+    public function detalleEncabezadoError($idArchivo, $nobArchivo, $rifPagador, $docPagador, $nError, $dError, $codErrorEncabezado, $fecValor){
+        $nroLineas = 0;
+
+        //$rutaArchivo  = storage_path('app\archivos\temporales\\' . $nobArchivo);
+        $rutaArchivo = storage_path('app/archivos/temporales/' . $nobArchivo);
+
+        if (File::exists($rutaArchivo)) {
+            $archivo = File::lines($rutaArchivo); 
+            $numeroLinea = 0;
+            $leidoHeader = false;
+            foreach ($archivo as $linea) {
+                $nroLineas+=1;
+                if(!empty($linea)){
+                    $arrayLinea = explode(';', $linea);
+                    if(!$leidoHeader){
+                        $leidoHeader = true;
+                    }else{
+                        $tDocumento = "";
+                        $nDocumento = "";
+                        $nProveedor = "";
+                        $mPagar = "";
+                        $cReceptora = "";
+                        $eReceptor = "";
+                        $nReferencia = "";
+                        if(isset($arrayLinea[1])){
+                            $tDocumento = trim($arrayLinea[1]);
+                        }                     
+
+                        if(isset($arrayLinea[2])){
+                            $nDocumento = trim($arrayLinea[2]);
+                        }                         
+
+                        if(isset($arrayLinea[3])){
+                            $nProveedor = trim($arrayLinea[3]);
+                        }                     
+
+                        if(isset($arrayLinea[4])){
+                            $mpagar = trim($arrayLinea[4]);
+                        }                     
+
+                        if(isset($arrayLinea[5])){
+                            $cReceptora = trim($arrayLinea[5]);
+                        }                     
+
+                        if(isset($arrayLinea[6])){
+                            $eReceptor = trim($arrayLinea[6]);
+                        }                     
+
+                        if(isset($arrayLinea[7])){
+                            $nReferencia = trim($arrayLinea[7]);
+                        }      
+
+                        //Gr¿uaradr detalle en tabla detalle
+                        $archivoDetalle = new Archivo_Detalle();
+                        $archivoDetalle->id_archivo = $idArchivo;
+                        $archivoDetalle->tipo_documento = $arrayLinea[1];
+                        $archivoDetalle->nro_documento = $arrayLinea[2];
+                        $archivoDetalle->nob_proveedor = $arrayLinea[3];
+                        $archivoDetalle->monto_pagar = $arrayLinea[4];
+                        $archivoDetalle->monto_pagar_ok = 0.00;
+                        $archivoDetalle->cta_receptora = $arrayLinea[5];
+                        $archivoDetalle->email_receptor = $arrayLinea[6];
+                        $archivoDetalle->nro_referencia = $arrayLinea[7];
+                        $archivoDetalle->linea = $linea;
+                        $archivoDetalle->nro_linea = $nroLineas;
+                        $archivoDetalle->error_detalle = 1;
+                        $archivoDetalle->cod_error_detalle = $codErrorEncabezado;
+                        $archivoDetalle->desc_error_detalle = $dError;
+                        $archivoDetalle->error_pago = 1;
+                        $archivoDetalle->cod_error_pago = $codErrorEncabezado;
+                        $archivoDetalle->desc_error_pago = $dError;
+                        $archivoDetalle->save();
+                    }//IDENTIFICA REGISTRO ENCABEZADO
+                } //empty(linea)     
+            }  //Fin foreach
+            $this->copiarArchivoError($nobArchivo);
+        }
+        return 2;   
+    }    
+
+
+//fin del trait
+}    
+

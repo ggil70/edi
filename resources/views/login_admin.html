@@ -1,0 +1,127 @@
+<DOCTYPE html>
+	<html>
+
+
+<head>
+	<meta charset="UTF-8">
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--===============================================================================================-->	
+	<link rel="icon" type="image/png" href="assets/assets_login1/images/icons/favicon.ico"/>
+
+<!--===============================================================================================-->	
+	<link href="assets/assets_login1/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet" type="text/css">
+
+	<link href="assets/assets_login1/fonts/font-awesome-4.7.0/css/font-awesome.min.css" rel="stylesheet" type="text/css">
+    <!--
+	<link href="assets/assets_login1/fonts/Linearicons-Free-v1.0.0/icon-font.min.css" rel="stylesheet" type="text/css">
+	-->
+    <!--
+	<link href="assets/assets_login1/vendor/animate/animate.css" rel="stylesheet" type="text/css">
+    
+	<link href="assets/assets_login1/vendor/css-hamburgers/hamburgers.min.css" rel="stylesheet" type="text/css">
+
+	<link href="assets/assets_login1/vendor/animsition/css/animsition.min.css" rel="stylesheet" type="text/css">
+
+	<link href="assets/assets_login1/vendor/select2/select2.min.css" rel="stylesheet" type="text/css">
+
+	<link href="assets/assets_login1/vendor/daterangepicker/daterangepicker.css" rel="stylesheet" type="text/css">
+
+	<link href="assets/assets_login1/css/util.css" rel="stylesheet" type="text/css">
+
+	<link rel="stylesheet" type="text/css" href="assets/assets_login1/fonts/iconic/css/material-design-iconic-font.min.css">
+
+	<link href="assets/assets_sistema/toastr.min.css" rel="stylesheet" type="text/css">
+	-->
+
+
+
+<link href="css/main.css" rel="stylesheet" type="text/css">
+
+<!--===============================================================================================-->
+</head>
+<body style="background-color: #666666;">	
+	<div class="limiter">
+		<div class="container-login100">
+			<div class="wrap-login100">
+
+				 <form class="login100-form validate-form" id="formulario" autocomplete="off"> 
+					<span class="login100-form-title p-b-43">
+						Sistema de Asignación de APIS a Aliados
+					</span>
+
+					<div class='row'>
+	     				<div id="error_validar" style="display:none; " class=" col-md-12 alert alert-danger">
+	     				</div>
+					</div>
+
+					<div style="border: 1px solid blue; padding: 5px; ">
+
+                    <div>
+						<spam style="color: blue; font-weight: bold;">P-Cero</spam>
+						<br>
+						<input type="text" name="usuario" id="usuario" style=" padding: 5px;" width="500px" class=" col-md-12" focus>
+  					</div>		
+					<br>
+					<div>
+						<spam style="color: blue; font-weight: bold;">Password</spam>
+						<br>
+						<input type="password" name="pass" id="pass" style="padding: 5px;" class="col-md-12" >	
+					</div>
+					<br>
+
+
+					<div class="container-login100-form-btn">
+						<button type="button" class="login100-form-btn" onclick="validar()">
+							Acceder
+						</button>
+					</div>
+
+					</div>
+
+
+
+					<input type="hidden" id="ruta" name="ruta" value="">
+				
+				</form>
+
+				<div class="login100-more" 
+				     style="background-image: url('images/imagenP.jpg');">
+				</div>
+			</div>
+		</div>
+	</div>
+</html>	
+	
+	
+    <script>
+
+    document.getElementById("usuario").focus();
+
+    function validar(){
+		error=0;
+		formulario = "formulario";
+		objeto = "usuario";
+		campo = document.forms[formulario].elements[objeto].value;
+		campo = campo.replace(/(^\s*)|(\s*$)/g,"");
+		usuario = campo.replace(/(^\s*)|(\s*$)/g,"");
+		if (campo.length==0){
+		    error = 1;
+		}
+		objeto = "pass";
+		campo = document.forms[formulario].elements[objeto].value;
+		campo = campo.replace(/(^\s*)|(\s*$)/g,"");
+		clave = campo.replace(/(^\s*)|(\s*$)/g,"");
+		if (campo.length==0){
+		    error = 1;
+		}
+		
+		if(error == 1){
+            document.getElementById('error_validar').style.display = "inline";
+            document.getElementById('error_validar').innerHTML = "Acceso denegado. Verifique el P-Cero y el Password ";
+        }    
+
+    }    
+ 
+    </script>
+  

@@ -1,0 +1,206 @@
+<?php
+
+namespace App\Traits;
+
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\File; // Importante importar esto para trabajar con archivo fisico
+
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+
+//use Illuminate\Support\Facades\Log;
+
+use Exception;
+
+trait CrearBanstas
+{
+    /**
+     * Realiza operaciones con archivos físicos
+     *
+     * @param array $data Los datos del pago a validar.
+     * @return \Illuminate\Http\JsonResponse
+     */
+
+    //Permite almacenar en un arreglo los nombre de los archivos contenido en una carpeta 
+    //en un momento dado
+    public function crearArchivoBansta()
+    {
+        $nobArchivo = 'mi_prueba_bansta.txt';
+        $cadenaEncabezado = $this->encabezadoBansta();
+        $cadenaDetalleStatus = $this->cadenaDetalleStatus();
+        $responseGenerarArchivo = $this->generarArcBansta($cadenaEncabezado, $cadenaDetalleStatus, $nobArchivo);
+        $data = json_encode($responseGenerarArchivo);
+        $success = $responseGenerarArchivo->original['success'];
+
+        if ($success == 1) {
+            $respCopiaFtp = $this->copiarFtp($nobArchivo);
+            if ($respCopiaFtp) {
+                die("archivo enviadop a ftp");
+            } else {
+                die("Error en la ceacion del archivo");
+            }
+            //copiar archivo a
+        }
+    }
+
+    public function encabezadoBansta()
+    {
+        $data = [
+            'nroRefstatusbansta' => '123456',
+            'fechaHora' => date('YmdHis'),
+            'tipoOrden' => 'SAL',
+            'nroRefOrdenPago' => '999990000002520',
+            'bcoEmisor' => 'UNIOVECA',
+            'tipoDocumentoEmp' => 'J',
+            'nroDocumentoEmp' => '123456789',
+            'nobEmpresa' => 'Makro CA'
+        ];
+        dd($data);
+
+        //formatear datos segun manual
+        $tipoRegistro = "01";
+        //nro ref status bancario
+        $nroRefBansta = trim($data['nroRefstatusbansta']);
+
+        $nroRefBansta = str_pad($nroRefBansta, 35, " ", STR_PAD_RIGHT);
+        $fechaHora = trim($data['fechaHora']);
+        $tipoOrden = trim($data['tipoOrden']);
+        $nroRefOrdenPago = trim($data['nroRefOrdenPago']);
+        $nroRefOrdenPago = str_pad($nroRefOrdenPago, 15, " ", STR_PAD_RIGHT);
+        $bcoEmisor = trim($data['bcoEmisor']);
+        $bcoEmisor = str_pad($bcoEmisor, 12, " ", STR_PAD_RIGHT);
+        $tipoDocEmp = trim($data['tipoDocumentoEmp']);
+        $nroDocEmp =  trim($data['nroDocumentoEmp']);
+        $nroDocEmp = str_pad($nroDocEmp, 16, "0", STR_PAD_LEFT);
+        $empresaRif = $tipoDocEmp . $nroDocEmp;
+
+        $empresaNob = trim($data['nobEmpresa']);
+        $empresaNob = str_pad($empresaNob, 70, " ", STR_PAD_RIGHT);
+
+        $cadenaEncabezado =  $tipoRegistro . $nroRefBansta . $fechaHora . $tipoOrden . $nroRefOrdenPago . $bcoEmisor . $empresaRif . $empresaNob . "\n";
+
+        return $cadenaEncabezado;
+    }
+
+    public function cadenaDetalleStatus()
+    {
+        $data = [
+            [
+                'indicadorTipo' => 'CR',
+                'nroReferenciaAsociado' => '34100500',
+                'fechaVencimientoTarjeta' => '',
+                'fechaHoraAplicacion' => '',
+                'montoTotal' => '5000.00',
+                'moneda' => 'VES',
+                'cedRifOrdenante' => 'J123456789',
+                'nroCuenta' => '01711234567891234567',
+                'codBancoBenef' => '',
+                'descBancoBenef' => '',
+                'codAgencia' => '',
+                'nobBeneficiario' => 'Pedro Perez',
+                'estatusCodBanco' => '00000',
+                'estatusDescBanco' => 'TRANSACCION ACEPTADA',
+            ],
+            [
+                'indicadorTipo' => 'CD',
+                'nroReferenciaAsociado' => '86100500',
+                'fechaVencimientoTarjeta' => '',
+                'fechaHoraAplicacion' => '',
+                'montoTotal' => '8000.00',
+                'moneda' => 'VES',
+                'cedRifOrdenante' => 'J987654321',
+                'nroCuenta' => '01311234567891234567',
+                'codBancoBenef' => '',
+                'descBancoBenef' => '',
+                'codAgencia' => '',
+                'nobBeneficiario' => 'COMERCIALIZADORA PRUEBA CA',
+                'estatusCodBanco' => '99999',
+                'estatusDescBanco' => 'CUENTA SIN FONDO',
+
+            ]
+        ];
+
+        $cadenaDetalle = '';
+        foreach ($data as $record) {
+            //armar cadena
+            $tipoRegistro = '02';
+            $tipoStatus = '03';
+            $indicadorRef = trim($record['indicadorTipo']);
+            $indicadorRef = str_pad($indicadorRef, 3, " ", STR_PAD_RIGHT);
+            $nroRefAsociado = trim($record['nroReferenciaAsociado']);
+            $nroRefAsociado = str_pad($nroRefAsociado, 15, " ", STR_PAD_RIGHT);
+            $fecVencTarj = '';
+            $fecVencTarj = str_pad($fecVencTarj, 6, " ", STR_PAD_RIGHT);
+            $fecHoraAplic = '';
+            $fecHoraAplic = str_pad($fecHoraAplic, 8, " ", STR_PAD_RIGHT);
+
+            $monto = trim($record['montoTotal']);
+            $arrayMto = explode(".", $monto);
+            $entero = trim($arrayMto[0]);
+            $entero = str_pad($entero, 15, "0", STR_PAD_LEFT);
+            $decimal = trim($arrayMto[1]);
+            $decimal = str_pad($decimal, 2, "0", STR_PAD_LEFT);
+            $montoTotal = $entero . $decimal;
+            $moneda = trim($record['moneda']);
+
+            $cedRifOrden = trim($record['cedRifOrdenante']);
+            $literal = substr($cedRifOrden, 0, 1);
+            $nroDocumentoOrden = substr($cedRifOrden, 1);
+            $nroDocumentoOrden = str_pad($nroDocumentoOrden, 16, "0", STR_PAD_LEFT);
+            $cedRifOrdenFinal = $literal . $nroDocumentoOrden;
+            $nroCuenta = trim($record['nroCuenta']);
+
+            $codBancoBenef = trim($record['codBancoBenef']);
+            $codBancoBenef = str_pad($codBancoBenef, 12, " ", STR_PAD_RIGHT);
+
+            $descBancoBenef = trim($record['descBancoBenef']);
+            $descBancoBenef = str_pad($descBancoBenef, 70, " ", STR_PAD_RIGHT);
+
+            $codAgencia = trim($record['codAgencia']);
+            $codAgencia = str_pad($codAgencia, 5, " ", STR_PAD_RIGHT);
+
+            $nobBeneficiario = trim($record['nobBeneficiario']);
+            $nobBeneficiario = str_pad($nobBeneficiario, 70, " ", STR_PAD_RIGHT);
+
+            //estus registro
+            $estatusCodBanco = trim($record['estatusCodBanco']);
+            $estatusCodBanco = str_pad($estatusCodBanco, 5, " ", STR_PAD_RIGHT);
+
+            $estatusDescBanco = trim($record['estatusDescBanco']);
+            $estatusDescBanco = str_pad($estatusDescBanco, 70, " ", STR_PAD_RIGHT);
+
+            $cadenaDetalle .= $tipoRegistro . $indicadorRef . $nroRefAsociado . $fecVencTarj . $fecHoraAplic;
+            $cadenaDetalle .= $montoTotal . $moneda . $cedRifOrdenFinal . $nroCuenta . $codBancoBenef . $descBancoBenef;
+            $cadenaDetalle .= $codAgencia . $nobBeneficiario . "\n";
+            $cadenaDetalle .= $tipoStatus . $estatusCodBanco . $estatusDescBanco . "\n";
+        }
+
+        return $cadenaDetalle;
+    }
+
+
+    public function generarArcBansta($encabezado, $cadenaDetalleStatus, $nobArchivo)
+    {
+        $nobArchivo = trim($nobArchivo);
+        $path = '/archivoBansta/' . $nobArchivo;
+        $cadenaTotal = $encabezado . $cadenaDetalleStatus;
+        try {
+            Storage::disk('archivos')->put($path, $cadenaTotal);
+            return response()->json([
+                'success' => true,
+                'message' => 'archivo Creado',
+            ], 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al crear el archivo: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+
+
+
+
+    //fin del trait
+}

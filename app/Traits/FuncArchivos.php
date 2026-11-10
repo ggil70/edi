@@ -1,0 +1,172 @@
+<?php
+
+namespace App\Traits;
+
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\File; // Importante importar esto para trabajar con archivo fisico
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+
+//use Illuminate\Support\Facades\Log;
+use Exception;
+
+trait FuncArchivos
+{
+    /**
+     * Realiza operaciones con archivos físicos
+     *
+     * @param array $data Los datos del pago a validar.
+     * @return \Illuminate\Http\JsonResponse
+     */
+
+    //Permite almacenar en un arreglo los nombre de los archivos contenido en una carpeta 
+    //en un momento dado
+    public function leerArchivosCarpeta(){
+
+
+        $todosLosArchivos = Storage::disk('archivosEntrada')->files();
+        $swArchivo = 0;
+        foreach ($todosLosArchivos as $archivo) {
+            if ($archivo !== '.' && $archivo !== '..') {
+                $swArchivo = 1;
+            }
+        }
+        if ($swArchivo > 0) {
+            return $todosLosArchivos;
+        } else {
+            return 0;
+        }
+    }
+
+
+    //copiar archivo bansta hacia la carpeta donde se almacenara la respuesta para EDI
+    public function copiarBanstaFtp($nobArchivo){
+        $pathOrigen = storage_path('app/archivos/archivoBansta/' . $nobArchivo);
+        $nombre_destino = $nobArchivo;
+
+        try {
+            $contenido = file_get_contents($pathOrigen);
+            $respCopiaFtp = Storage::disk('ftpBansta')->put($nombre_destino, $contenido);
+            return true;
+        } catch (\Exception $e) {
+            return true;
+        }
+    }
+
+    /*public function copiarArchivoTemporal($todosLosArchivos){
+        $rutaOrigen  = 'entradas\\';
+        $rutaDestino  = 'temporales\\';
+        //recorrer el arreglo de nombre de archivo para copiar los archivo al directorio temporal
+        foreach ($todosLosArchivos as $archivo) {
+            if($archivo !== '.' && $archivo !== '..'){
+                $origen = trim($rutaOrigen) . trim($archivo);
+                $destino = trim($rutaDestino) . trim($archivo);
+                if (Storage::disk('archivosEntrada')->exists($archivo)){
+                    //copiar archivo en la carpeta temporal.
+                    //Activar despues de las pruebas
+                    //$copiado = Storage::disk('archivos')->move($origen, $destino);
+                }
+            }
+        }        
+        return true;    
+    }*/
+
+    public function copiarCarpetaBansta($nombreArchivo, $cadenaBansta){
+        $rutaCarpeta = 'archivos/archivoBansta';
+        $rutaCompleta = $rutaCarpeta . '/' . $nombreArchivo;
+        Storage::disk('local')->put($rutaCompleta, $cadenaBansta);
+        return true;
+    }
+
+
+    public function copiarArchivoError($archivo){
+        $rutaOrigen  = 'temporales\\';
+        $rutaDestino  = 'conErrores\\';
+        $origen = trim($rutaOrigen) . trim($archivo);
+        $destino = trim($rutaDestino) . trim($archivo);
+        if (Storage::disk('archivosTemporal')->exists($archivo)) {
+            //copiar archivo en la carpeta Errores.
+            $copiado = Storage::disk('archivos')->move($origen, $destino);
+        }
+        return true;
+    }
+
+    public function copiarArchivoProcesados($archivo){
+        $rutaOrigen  = 'temporales\\';
+        $rutaDestino  = 'procesados\\';
+        $origen = trim($rutaOrigen) . trim($archivo);
+        $destino = trim($rutaDestino) . trim($archivo);
+        if (Storage::disk('archivosTemporal')->exists($archivo)) {
+            //copiar archivo en la carpeta procesados.
+            $copiado = Storage::disk('archivos')->move($origen, $destino);
+        }
+        return true;
+    }
+
+
+    public function leerArchivosFtp(){
+        //buscar en carpeta ftp archivos existentes0 
+        try {
+            $todosLosArchivos = Storage::disk('ftpEntrada')->files();
+            if ($todosLosArchivos) {
+                $respCopiaTemporal = $this->copiarArchivoTemporalFtp($todosLosArchivos);
+                $data = [
+                    'respuesta' => 0,
+                    'archivos' => $todosLosArchivos
+                ];
+                return $data;
+            } else {
+                $data = [
+                    'respuesta' => 1,
+                    'detError' => 'SIN ARCHIVOS EN LA RUTA'
+                ];
+                return $data;
+            }
+        } catch (\Exception $e) {
+            $data = [
+                'respuesta' => 2,
+                'detError' => 'ERROR RESPUESTA SERVIDOR FTP ' . $e->getMessage()
+
+            ];
+            return $data;
+        }
+    }
+
+
+    public function copiarArchivoTemporalFtp($todosLosArchivos){
+        $rutaOrigen  = 'EDI_ENTRADA\\';
+        $rutaDestino  = 'temporales\\';
+        //recorrer el arreglo de nombre de archivo para copiar los archivo al directorio temporal
+        foreach ($todosLosArchivos as $archivo) {
+            if ($archivo !== '.' && $archivo !== '..') {
+                $pathLocal = '/temporales/' . $archivo;
+                if (Storage::disk('ftpEntrada')->exists($archivo)) {
+                    $fileContents = Storage::disk('ftpEntrada')->get($archivo);
+                    Storage::disk('archivos')->put($pathLocal, $fileContents);
+                    $deletionSuccess = Storage::disk('ftpEntrada')->delete($archivo);
+                }
+            }
+        }
+        return true;
+    }
+
+
+    //Permite almacenar en un arreglo los nombre de los archivos contenido en una carpeta 
+    //en un momento dado
+    public function leerArchivosCarpetaTemp(){
+        $todosLosArchivos = Storage::disk('archivosTemporal')->files();
+        $swArchivo = 0;
+        foreach ($todosLosArchivos as $archivo) {
+            if ($archivo !== '.' && $archivo !== '..') {
+                $swArchivo = 1;
+            }
+        }
+        if ($swArchivo > 0) {
+            return $todosLosArchivos;
+        } else {
+            return 0;
+        }
+    }
+
+    //fin del trait
+}
